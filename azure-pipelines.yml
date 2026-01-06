@@ -1,10 +1,7 @@
-# =========================================================
-# POWER BI CI/CD PIPELINE (DEV → PROD)
-# Parameter-driven | Service Principal | Stable Refresh
-# =========================================================
-
+# ==========================================
+# TRIGGER
+# ==========================================
 trigger:
-  batch: true
   branches:
     include:
       - main
@@ -13,123 +10,85 @@ trigger:
       - Reports/*.pbix
       - Scripts/*.ps1
       - azure-pipelines.yml
-    exclude:
-      - README.md
-      - '*.md'
 
 pr: none
 
-# =========================================================
+# ==========================================
 # AGENT
-# =========================================================
+# ==========================================
 pool:
-  vmImage: 'windows-latest'
+  vmImage: windows-latest
 
-# =========================================================
+# ==========================================
 # STAGES
-# =========================================================
+# ==========================================
 stages:
 
-# =========================================================
+# =====================================================
 # DEV STAGE
-# =========================================================
+# =====================================================
 - stage: Deploy_DEV
-  displayName: 'Deploy to DEV'
+  displayName: Deploy to DEV
   variables:
     - group: PowerBI-Dev
 
   jobs:
-  - job: DEV_Deployment
-    displayName: 'Publish & Configure DEV'
+  - job: DeployDEV
+    displayName: Publish & Configure DEV
+
     steps:
-
-    # -----------------------------------------------------
-    # Checkout
-    # -----------------------------------------------------
     - checkout: self
-      persistCredentials: true
 
-    # -----------------------------------------------------
+    # ------------------------------------------
     # Install Power BI Module
-    # -----------------------------------------------------
+    # ------------------------------------------
     - task: PowerShell@2
-      displayName: 'Install Power BI Module'
+      displayName: Install Power BI Module
       inputs:
         targetType: inline
         script: |
           Install-Module MicrosoftPowerBIMgmt -Force -Scope CurrentUser -AllowClobber
 
-    # -----------------------------------------------------
-    # Publish PBIX to DEV
-    # -----------------------------------------------------
+    # ------------------------------------------
+    # Publish Report (DEV)
+    # ------------------------------------------
     - task: PowerShell@2
-      displayName: 'Publish Reports (DEV)'
+      displayName: Publish Reports (DEV)
       inputs:
         targetType: inline
         script: |
-          $pbixFiles = Get-ChildItem "$(Build.SourcesDirectory)/Reports" -Filter "*.pbix" -File
-          if ($pbixFiles.Count -eq 0) { throw "No PBIX files found" }
-
-          Import-Module MicrosoftPowerBIMgmt
-          $securePassword = ConvertTo-SecureString "$(ServicePrincipalSecret)" -AsPlainText -Force
-          $credential = New-Object PSCredential("$(ServicePrincipalClientId)", $securePassword)
-
-          Connect-PowerBIServiceAccount `
-            -ServicePrincipal `
-            -Credential $credential `
-            -TenantId "$(TenantId)"
-
-          $existingReports = Get-PowerBIReport -WorkspaceId "$(DevWorkspaceId)" -ErrorAction SilentlyContinue
+          $pbixFiles = Get-ChildItem "$(Build.SourcesDirectory)/Reports" -Filter "*.pbix"
 
           foreach ($file in $pbixFiles) {
-            $reportName = [IO.Path]::GetFileNameWithoutExtension($file.Name)
-            $exists = $existingReports | Where-Object Name -eq $reportName
-
-            if ($exists) {
-              Write-Host "Updating DEV report: $reportName"
-              & "$(Build.SourcesDirectory)/Scripts/Publish-PowerBIReport.ps1" `
-                -ClientId "$(ServicePrincipalClientId)" `
-                -ClientSecret "$(ServicePrincipalSecret)" `
-                -TenantId "$(TenantId)" `
-                -WorkspaceId "$(DevWorkspaceId)" `
-                -ReportPath $file.FullName
-            }
-            else {
-              Write-Host "First deployment DEV: $reportName"
-              & "$(Build.SourcesDirectory)/Scripts/Publish-PowerBIReport.ps1" `
-                -ClientId "$(ServicePrincipalClientId)" `
-                -ClientSecret "$(ServicePrincipalSecret)" `
-                -TenantId "$(TenantId)" `
-                -WorkspaceId "$(DevWorkspaceId)" `
-                -ReportPath $file.FullName `
-                -FirstDeployment
-            }
-
-            if ($LASTEXITCODE -ne 0) { throw "DEV publish failed" }
-          }
-
-    # -----------------------------------------------------
-    # Take Dataset Ownership (DEV)
-    # -----------------------------------------------------
-    - task: PowerShell@2
-      displayName: 'Take Dataset Ownership (DEV)'
-      inputs:
-        targetType: inline
-        script: |
-          if ($env:DatasetId) {
-            & "$(Build.SourcesDirectory)/Scripts/Take-DatasetOwnership.ps1" `
+            & "$(Build.SourcesDirectory)/Scripts/Publish-PowerBIReport.ps1" `
               -ClientId "$(ServicePrincipalClientId)" `
               -ClientSecret "$(ServicePrincipalSecret)" `
               -TenantId "$(TenantId)" `
               -WorkspaceId "$(DevWorkspaceId)" `
-              -DatasetId $env:DatasetId
+              -ReportPath $file.FullName `
+              -FirstDeployment
           }
 
-    # -----------------------------------------------------
-    # Update Parameters (DEV)
-    # -----------------------------------------------------
+    # ------------------------------------------
+    # Take Dataset Ownership (DEV)
+    # ------------------------------------------
     - task: PowerShell@2
-      displayName: 'Update Parameters (DEV)'
+      displayName: Take Dataset Ownership (DEV)
+      inputs:
+        targetType: inline
+        script: |
+          & "$(Build.SourcesDirectory)/Scripts/Take-DatasetOwnership.ps1" `
+            -ClientId "$(ServicePrincipalClientId)" `
+            -ClientSecret "$(ServicePrincipalSecret)" `
+            -TenantId "$(TenantId)" `
+            -WorkspaceId "$(DevWorkspaceId)" `
+            -DatasetId "$(DatasetId)"
+
+    # ------------------------------------------
+    # Update Parameters (DEV) ✅ FIXED
+    # ------------------------------------------
+    - task: PowerShell@2
+      displayName: Update Parameters (DEV)
       inputs:
         targetType: inline
         script: |
@@ -140,13 +99,14 @@ stages:
             -WorkspaceId "$(DevWorkspaceId)" `
             -DatasetId "$(DatasetId)" `
             -OneDriveSiteUrl "$(OneDriveSiteUrl)" `
-            -FilePath "$(DevFilePath)"
+            -OneDriveFilePath "$(DevFilePath)" `
+            -Environment "DEV"
 
-    # -----------------------------------------------------
+    # ------------------------------------------
     # Refresh Dataset (DEV)
-    # -----------------------------------------------------
+    # ------------------------------------------
     - task: PowerShell@2
-      displayName: 'Refresh Dataset (DEV)'
+      displayName: Refresh Dataset (DEV)
       continueOnError: true
       inputs:
         targetType: inline
@@ -158,30 +118,30 @@ stages:
             -WorkspaceId "$(DevWorkspaceId)" `
             -DatasetId "$(DatasetId)"
 
-    # -----------------------------------------------------
+    # ------------------------------------------
     # Publish Artifact for PROD
-    # -----------------------------------------------------
+    # ------------------------------------------
     - task: PublishPipelineArtifact@1
-      displayName: 'Publish Artifact'
+      displayName: Publish Artifact
       inputs:
         targetPath: '$(Build.SourcesDirectory)'
         artifact: 'PowerBIArtifact'
-        publishLocation: pipeline
 
-# =========================================================
+
+# =====================================================
 # PROD STAGE
-# =========================================================
+# =====================================================
 - stage: Deploy_PROD
-  displayName: 'Deploy to PROD'
+  displayName: Deploy to PROD
   dependsOn: Deploy_DEV
   condition: succeeded()
   variables:
     - group: PowerBI-Prod
 
   jobs:
-  - deployment: PROD_Deployment
-    displayName: 'Publish & Configure PROD'
-    environment: 'PowerBI-Production'
+  - deployment: DeployPROD
+    displayName: Publish & Configure PROD
+    environment: PowerBI-PROD
 
     strategy:
       runOnce:
@@ -189,62 +149,61 @@ stages:
           steps:
 
           - task: DownloadPipelineArtifact@2
-            displayName: 'Download Artifact'
+            displayName: Download Artifact
             inputs:
-              artifact: 'PowerBIArtifact'
-              path: '$(Pipeline.Workspace)/PowerBIArtifact'
+              artifact: PowerBIArtifact
+              path: $(Pipeline.Workspace)/PowerBIArtifact
 
+          # ------------------------------------------
+          # Install Power BI Module
+          # ------------------------------------------
           - task: PowerShell@2
-            displayName: 'Install Power BI Module'
+            displayName: Install Power BI Module
             inputs:
               targetType: inline
               script: |
                 Install-Module MicrosoftPowerBIMgmt -Force -Scope CurrentUser -AllowClobber
 
+          # ------------------------------------------
+          # Publish Report (PROD)
+          # ------------------------------------------
           - task: PowerShell@2
-            displayName: 'Publish Reports (PROD)'
+            displayName: Publish Reports (PROD)
             inputs:
               targetType: inline
               script: |
-                Import-Module MicrosoftPowerBIMgmt
-                $securePassword = ConvertTo-SecureString "$(ServicePrincipalSecret)" -AsPlainText -Force
-                $credential = New-Object PSCredential("$(ServicePrincipalClientId)", $securePassword)
-
-                Connect-PowerBIServiceAccount `
-                  -ServicePrincipal `
-                  -Credential $credential `
-                  -TenantId "$(TenantId)"
-
-                $existingReports = Get-PowerBIReport -WorkspaceId "$(ProdWorkspaceId)" -ErrorAction SilentlyContinue
-                $pbixFiles = Get-ChildItem "$(Pipeline.Workspace)/PowerBIArtifact/Reports" -Filter "*.pbix" -File
+                $pbixFiles = Get-ChildItem "$(Pipeline.Workspace)/PowerBIArtifact/Reports" -Filter "*.pbix"
 
                 foreach ($file in $pbixFiles) {
-                  $reportName = [IO.Path]::GetFileNameWithoutExtension($file.Name)
-                  $exists = $existingReports | Where-Object Name -eq $reportName
-
-                  if ($exists) {
-                    & "$(Pipeline.Workspace)/PowerBIArtifact/Scripts/Publish-PowerBIReport.ps1" `
-                      -ClientId "$(ServicePrincipalClientId)" `
-                      -ClientSecret "$(ServicePrincipalSecret)" `
-                      -TenantId "$(TenantId)" `
-                      -WorkspaceId "$(ProdWorkspaceId)" `
-                      -ReportPath $file.FullName
-                  }
-                  else {
-                    & "$(Pipeline.Workspace)/PowerBIArtifact/Scripts/Publish-PowerBIReport.ps1" `
-                      -ClientId "$(ServicePrincipalClientId)" `
-                      -ClientSecret "$(ServicePrincipalSecret)" `
-                      -TenantId "$(TenantId)" `
-                      -WorkspaceId "$(ProdWorkspaceId)" `
-                      -ReportPath $file.FullName `
-                      -FirstDeployment
-                  }
-
-                  if ($LASTEXITCODE -ne 0) { throw "PROD publish failed" }
+                  & "$(Pipeline.Workspace)/PowerBIArtifact/Scripts/Publish-PowerBIReport.ps1" `
+                    -ClientId "$(ServicePrincipalClientId)" `
+                    -ClientSecret "$(ServicePrincipalSecret)" `
+                    -TenantId "$(TenantId)" `
+                    -WorkspaceId "$(ProdWorkspaceId)" `
+                    -ReportPath $file.FullName `
+                    -FirstDeployment
                 }
 
+          # ------------------------------------------
+          # Take Dataset Ownership (PROD)
+          # ------------------------------------------
           - task: PowerShell@2
-            displayName: 'Update Parameters (PROD)'
+            displayName: Take Dataset Ownership (PROD)
+            inputs:
+              targetType: inline
+              script: |
+                & "$(Pipeline.Workspace)/PowerBIArtifact/Scripts/Take-DatasetOwnership.ps1" `
+                  -ClientId "$(ServicePrincipalClientId)" `
+                  -ClientSecret "$(ServicePrincipalSecret)" `
+                  -TenantId "$(TenantId)" `
+                  -WorkspaceId "$(ProdWorkspaceId)" `
+                  -DatasetId "$(DatasetId)"
+
+          # ------------------------------------------
+          # Update Parameters (PROD) ✅ FIXED
+          # ------------------------------------------
+          - task: PowerShell@2
+            displayName: Update Parameters (PROD)
             inputs:
               targetType: inline
               script: |
@@ -255,10 +214,14 @@ stages:
                   -WorkspaceId "$(ProdWorkspaceId)" `
                   -DatasetId "$(DatasetId)" `
                   -OneDriveSiteUrl "$(OneDriveSiteUrl)" `
-                  -FilePath "$(ProdFilePath)"
+                  -OneDriveFilePath "$(ProdFilePath)" `
+                  -Environment "PROD"
 
+          # ------------------------------------------
+          # Refresh Dataset (PROD)
+          # ------------------------------------------
           - task: PowerShell@2
-            displayName: 'Refresh Dataset (PROD)'
+            displayName: Refresh Dataset (PROD)
             continueOnError: true
             inputs:
               targetType: inline
