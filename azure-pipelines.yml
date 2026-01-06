@@ -70,21 +70,6 @@ stages:
           }
 
     # ------------------------------------------
-    # Take Dataset Ownership (DEV)
-    # ------------------------------------------
-    - task: PowerShell@2
-      displayName: Take Dataset Ownership (DEV)
-      inputs:
-        targetType: inline
-        script: |
-          & "$(Build.SourcesDirectory)/Scripts/Take-DatasetOwnership.ps1" `
-            -ClientId "$(ServicePrincipalClientId)" `
-            -ClientSecret "$(ServicePrincipalSecret)" `
-            -TenantId "$(TenantId)" `
-            -WorkspaceId "$(DevWorkspaceId)" `
-            -DatasetId "$(DatasetId)"
-
-    # ------------------------------------------
     # Update Parameters (DEV) ✅ FIXED
     # ------------------------------------------
     - task: PowerShell@2
@@ -184,22 +169,8 @@ stages:
                     -FirstDeployment
                 }
 
-          # ------------------------------------------
-          # Take Dataset Ownership (PROD)
-          # ------------------------------------------
-          - task: PowerShell@2
-            displayName: Take Dataset Ownership (PROD)
-            inputs:
-              targetType: inline
-              script: |
-                & "$(Pipeline.Workspace)/PowerBIArtifact/Scripts/Take-DatasetOwnership.ps1" `
-                  -ClientId "$(ServicePrincipalClientId)" `
-                  -ClientSecret "$(ServicePrincipalSecret)" `
-                  -TenantId "$(TenantId)" `
-                  -WorkspaceId "$(ProdWorkspaceId)" `
-                  -DatasetId "$(DatasetId)"
 
-          # ------------------------------------------
+         # ------------------------------------------
           # Update Parameters (PROD) ✅ FIXED
           # ------------------------------------------
           - task: PowerShell@2
