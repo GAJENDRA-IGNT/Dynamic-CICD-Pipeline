@@ -139,7 +139,7 @@ stages:
             -TenantId "$(TenantId)" `
             -WorkspaceId "$(DevWorkspaceId)" `
             -DatasetId "$(DatasetId)" `
-            -OneDriveURL "$(OneDriveURL)" `
+            -OneDriveURL "$(OneDriveSiteUrl)" `
             -FilePath "$(DevFilePath)"
 
     # -----------------------------------------------------
@@ -254,7 +254,7 @@ stages:
                   -TenantId "$(TenantId)" `
                   -WorkspaceId "$(ProdWorkspaceId)" `
                   -DatasetId "$(DatasetId)" `
-                  -OneDriveURL "$(OneDriveURL)" `
+                  -OneDriveURL "$(OneDriveSiteUrl)" `
                   -FilePath "$(ProdFilePath)"
 
           - task: PowerShell@2
