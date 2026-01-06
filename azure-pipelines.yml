@@ -1,0 +1,298 @@
+trigger:
+  branches:
+    include:
+      - main
+      - master
+  paths:
+    include:
+      - 'Reports/*.pbix'
+
+pool:
+  vmImage: 'windows-latest'
+
+stages:
+# ================================
+# DEV STAGE (OneDrive - DEV Folder)
+# ================================
+- stage: DeployToDev
+  displayName: 'Deploy to DEV'
+  variables:
+    - group: PowerBI-Dev
+  jobs:
+  - job: PublishToDev
+    displayName: 'Publish Reports to DEV'
+    steps:
+    
+    - task: PowerShell@2
+      displayName: 'Find PBIX Files'
+      inputs:
+        targetType: 'inline'
+        script: |
+          Write-Host "Finding PBIX files in Reports folder..."
+          $pbixFiles = Get-ChildItem -Path "$(Build.SourcesDirectory)/Reports" -Filter "*.pbix" -File
+          
+          Write-Host "Found $($pbixFiles.Count) PBIX file(s):"
+          foreach ($file in $pbixFiles) {
+              Write-Host "  - $($file.Name)"
+          }
+          
+          if ($pbixFiles.Count -eq 0) {
+              Write-Error "No PBIX files found in Reports folder!"
+              exit 1
+          }
+          
+          $filesJson = $pbixFiles | Select-Object -ExpandProperty FullName | ConvertTo-Json -Compress
+          Write-Host "##vso[task.setvariable variable=ChangedPBIXFiles]$filesJson"
+    
+    - task: PowerShell@2
+      displayName: 'Install Power BI Module'
+      inputs:
+        targetType: 'inline'
+        script: |
+          Write-Host "Installing MicrosoftPowerBIMgmt module..."
+          Install-Module -Name MicrosoftPowerBIMgmt -Force -Scope CurrentUser -AllowClobber
+          Write-Host "Module installed successfully" -ForegroundColor Green
+    
+    - task: PowerShell@2
+      displayName: 'Publish Reports to DEV'
+      inputs:
+        targetType: 'inline'
+        script: |
+          $pbixFiles = '$(ChangedPBIXFiles)' | ConvertFrom-Json
+          
+          foreach ($filePath in $pbixFiles) {
+              Write-Host ""
+              Write-Host "=========================================="
+              Write-Host "Processing: $(Split-Path $filePath -Leaf)"
+              Write-Host "=========================================="
+              
+              & "$(Build.SourcesDirectory)/Scripts/Publish-PowerBIReport.ps1" `
+                  -ClientId "$(ServicePrincipalClientId)" `
+                  -ClientSecret "$(ServicePrincipalSecret)" `
+                  -TenantId "$(TenantId)" `
+                  -WorkspaceId "$(DevWorkspaceId)" `
+                  -ReportPath $filePath
+              
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "Failed to publish report"
+                  exit 1
+              }
+          }
+          
+          Write-Host ""
+          Write-Host "All reports published to DEV!" -ForegroundColor Green
+    
+    - task: PowerShell@2
+      displayName: 'Take Dataset Ownership (DEV)'
+      continueOnError: true
+      inputs:
+        targetType: 'inline'
+        script: |
+          if ([string]::IsNullOrEmpty($env:DatasetId)) {
+              Write-Warning "No DatasetId found, skipping ownership"
+              exit 0
+          }
+          
+          & "$(Build.SourcesDirectory)/Scripts/Take-DatasetOwnership.ps1" `
+              -ClientId "$(ServicePrincipalClientId)" `
+              -ClientSecret "$(ServicePrincipalSecret)" `
+              -TenantId "$(TenantId)" `
+              -WorkspaceId "$(DevWorkspaceId)" `
+              -DatasetId $env:DatasetId
+    
+    - task: PowerShell@2
+      displayName: 'Update to DEV OneDrive File'
+      continueOnError: true
+      inputs:
+        targetType: 'inline'
+        script: |
+          if ([string]::IsNullOrEmpty($env:DatasetId)) {
+              Write-Warning "No DatasetId found, skipping parameter update"
+              exit 0
+          }
+          
+          Write-Host "=========================================="
+          Write-Host "Updating to DEV OneDrive File"
+          Write-Host "=========================================="
+          Write-Host "OneDrive URL: $(OneDriveURL)"
+          Write-Host "DEV File Path: $(DevFilePath)"
+          Write-Host ""
+          
+          & "$(Build.SourcesDirectory)/Scripts/Update-OneDriveFilePath.ps1" `
+              -ClientId "$(ServicePrincipalClientId)" `
+              -ClientSecret "$(ServicePrincipalSecret)" `
+              -TenantId "$(TenantId)" `
+              -WorkspaceId "$(DevWorkspaceId)" `
+              -DatasetId $env:DatasetId `
+              -OneDriveURL "$(OneDriveURL)" `
+              -FilePath "$(DevFilePath)" `
+              -Environment "DEV"
+          
+          if ($LASTEXITCODE -ne 0) {
+              Write-Warning "Parameter update failed, but continuing pipeline"
+          } else {
+              Write-Host "Successfully updated to DEV OneDrive file" -ForegroundColor Green
+          }
+    
+    - task: PowerShell@2
+      displayName: 'Refresh Dataset (DEV)'
+      continueOnError: true
+      inputs:
+        targetType: 'inline'
+        script: |
+          if ([string]::IsNullOrEmpty($env:DatasetId)) {
+              Write-Warning "No DatasetId found, skipping refresh"
+              exit 0
+          }
+          
+          Write-Host "Refreshing dataset with DEV OneDrive data..."
+          
+          & "$(Build.SourcesDirectory)/Scripts/Refresh-Dataset.ps1" `
+              -ClientId "$(ServicePrincipalClientId)" `
+              -ClientSecret "$(ServicePrincipalSecret)" `
+              -TenantId "$(TenantId)" `
+              -WorkspaceId "$(DevWorkspaceId)" `
+              -DatasetId $env:DatasetId
+    
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Artifacts for PROD'
+      inputs:
+        targetPath: '$(Build.SourcesDirectory)'
+        artifact: 'PowerBIReports'
+        publishLocation: 'pipeline'
+
+# ================================
+# PROD STAGE (OneDrive - PROD Folder)
+# ================================
+- stage: DeployToProd
+  displayName: 'Deploy to PROD'
+  dependsOn: DeployToDev
+  condition: succeeded()
+  variables:
+    - group: PowerBI-Prod
+  jobs:
+  - deployment: PublishToProd
+    displayName: 'Publish Reports to PROD'
+    environment: 'PowerBI-Production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Artifacts from DEV'
+            inputs:
+              artifact: 'PowerBIReports'
+              path: '$(Pipeline.Workspace)/PowerBIReports'
+          
+          - task: PowerShell@2
+            displayName: 'Install Power BI Module'
+            inputs:
+              targetType: 'inline'
+              script: |
+                Write-Host "Installing MicrosoftPowerBIMgmt module..."
+                Install-Module -Name MicrosoftPowerBIMgmt -Force -Scope CurrentUser -AllowClobber
+                Write-Host "Module installed successfully" -ForegroundColor Green
+          
+          - task: PowerShell@2
+            displayName: 'Publish Reports to PROD'
+            inputs:
+              targetType: 'inline'
+              script: |
+                $pbixFiles = Get-ChildItem -Path "$(Pipeline.Workspace)/PowerBIReports/Reports" -Filter "*.pbix" -File
+                
+                Write-Host "Found $($pbixFiles.Count) PBIX file(s) to deploy to PROD"
+                
+                foreach ($file in $pbixFiles) {
+                    Write-Host ""
+                    Write-Host "=========================================="
+                    Write-Host "Deploying to PROD: $($file.Name)"
+                    Write-Host "=========================================="
+                    
+                    & "$(Pipeline.Workspace)/PowerBIReports/Scripts/Publish-PowerBIReport.ps1" `
+                        -ClientId "$(ServicePrincipalClientId)" `
+                        -ClientSecret "$(ServicePrincipalSecret)" `
+                        -TenantId "$(TenantId)" `
+                        -WorkspaceId "$(ProdWorkspaceId)" `
+                        -ReportPath $file.FullName
+                    
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Failed to publish report to PROD"
+                        exit 1
+                    }
+                }
+                
+                Write-Host ""
+                Write-Host "All reports deployed to PROD!" -ForegroundColor Green
+          
+          - task: PowerShell@2
+            displayName: 'Take Dataset Ownership (PROD)'
+            continueOnError: true
+            inputs:
+              targetType: 'inline'
+              script: |
+                if ([string]::IsNullOrEmpty($env:DatasetId)) {
+                    Write-Warning "No DatasetId found, skipping ownership"
+                    exit 0
+                }
+                
+                & "$(Pipeline.Workspace)/PowerBIReports/Scripts/Take-DatasetOwnership.ps1" `
+                    -ClientId "$(ServicePrincipalClientId)" `
+                    -ClientSecret "$(ServicePrincipalSecret)" `
+                    -TenantId "$(TenantId)" `
+                    -WorkspaceId "$(ProdWorkspaceId)" `
+                    -DatasetId $env:DatasetId
+          
+          - task: PowerShell@2
+            displayName: 'Update to PROD OneDrive File'
+            continueOnError: true
+            inputs:
+              targetType: 'inline'
+              script: |
+                if ([string]::IsNullOrEmpty($env:DatasetId)) {
+                    Write-Warning "No DatasetId found, skipping parameter update"
+                    exit 0
+                }
+                
+                Write-Host "=========================================="
+                Write-Host "Updating to PROD OneDrive File"
+                Write-Host "=========================================="
+                Write-Host "OneDrive URL: $(OneDriveURL)"
+                Write-Host "PROD File Path: $(ProdFilePath)"
+                Write-Host ""
+                
+                & "$(Pipeline.Workspace)/PowerBIReports/Scripts/Update-OneDriveFilePath.ps1" `
+                    -ClientId "$(ServicePrincipalClientId)" `
+                    -ClientSecret "$(ServicePrincipalSecret)" `
+                    -TenantId "$(TenantId)" `
+                    -WorkspaceId "$(ProdWorkspaceId)" `
+                    -DatasetId $env:DatasetId `
+                    -OneDriveURL "$(OneDriveURL)" `
+                    -FilePath "$(ProdFilePath)" `
+                    -Environment "PROD"
+                
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Parameter update failed, but continuing pipeline"
+                } else {
+                    Write-Host "Successfully updated to PROD OneDrive file" -ForegroundColor Green
+                }
+          
+          - task: PowerShell@2
+            displayName: 'Refresh Dataset (PROD)'
+            continueOnError: true
+            inputs:
+              targetType: 'inline'
+              script: |
+                if ([string]::IsNullOrEmpty($env:DatasetId)) {
+                    Write-Warning "No DatasetId found, skipping refresh"
+                    exit 0
+                }
+                
+                Write-Host "Refreshing dataset with PROD OneDrive data..."
+                
+                & "$(Pipeline.Workspace)/PowerBIReports/Scripts/Refresh-Dataset.ps1" `
+                    -ClientId "$(ServicePrincipalClientId)" `
+                    -ClientSecret "$(ServicePrincipalSecret)" `
+                    -TenantId "$(TenantId)" `
+                    -WorkspaceId "$(ProdWorkspaceId)" `
+                    -DatasetId $env:DatasetId
