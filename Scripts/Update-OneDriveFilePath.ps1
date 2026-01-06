@@ -1,36 +1,36 @@
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [string]$ClientId,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [string]$ClientSecret,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [string]$TenantId,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [string]$WorkspaceId,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [string]$DatasetId,
 
-    [Parameter(Mandatory=$true)]
-    [string]$OneDriveURL,
+    [Parameter(Mandatory = $true)]
+    [string]$OneDriveSiteUrl,
 
-    [Parameter(Mandatory=$true)]
-    [string]$FilePath,
+    [Parameter(Mandatory = $true)]
+    [string]$OneDriveFilePath,
 
+    [Parameter(Mandatory = $false)]
     [string]$Environment = "DEV"
 )
 
 Write-Host "============================================"
-Write-Host "Updating OneDrive File Path ($Environment)"
+Write-Host "Updating OneDrive Parameters ($Environment)"
 Write-Host "============================================"
-Write-Host "Dataset ID   : $DatasetId"
-Write-Host "Workspace ID : $WorkspaceId"
-
-$FullURL = "$OneDriveURL$FilePath"
-Write-Host "Target URL   : $FullURL"
+Write-Host "Workspace ID        : $WorkspaceId"
+Write-Host "Dataset ID          : $DatasetId"
+Write-Host "OneDriveSiteUrl     : $OneDriveSiteUrl"
+Write-Host "OneDriveFilePath    : $OneDriveFilePath"
 Write-Host ""
 
 try {
@@ -48,69 +48,99 @@ try {
     $tokenResponse = Invoke-RestMethod -Uri $tokenUrl -Method Post -Body $tokenBody
     $accessToken = $tokenResponse.access_token
 
-    $headers = @{
-        Authorization = "Bearer $accessToken"
-        "Content-Type" = "application/json"
-    }
+    Write-Host "✓ Access token obtained" -ForegroundColor Green
 
-    Write-Host "Access token obtained" -ForegroundColor Green
+    $headers = @{
+        "Authorization" = "Bearer $accessToken"
+        "Content-Type"  = "application/json"
+    }
 
     # -----------------------------------------
     # Read Existing Parameters
     # -----------------------------------------
     $paramsUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/parameters"
-    $params = Invoke-RestMethod -Uri $paramsUrl -Headers $headers -Method Get
 
-    $existingParam = $params.value | Where-Object { $_.name -eq "OneDriveFilePath" }
+    Write-Host ""
+    Write-Host "Reading existing dataset parameters..."
 
-    if (-not $existingParam) {
-        Write-Warning "Parameter 'OneDriveFilePath' not found. Skipping update."
-        exit 0
+    try {
+        $currentParams = Invoke-RestMethod -Uri $paramsUrl -Headers $headers -Method Get
+
+        foreach ($p in $currentParams.value) {
+            Write-Host "  - $($p.name): $($p.currentValue)"
+        }
     }
-
-    Write-Host "Existing value:"
-    Write-Host "  $($existingParam.currentValue)"
-
-    # -----------------------------------------
-    # SKIP if value already same (IMPORTANT)
-    # -----------------------------------------
-    if ($existingParam.currentValue -eq $FullURL) {
-        Write-Host ""
-        Write-Host "Parameter value already correct. No update needed." -ForegroundColor Cyan
-        Write-Host "Skipping UpdateParameters call to avoid 403."
-        exit 0
+    catch {
+        Write-Warning "Could not read existing parameters (dataset may not have parameters yet)"
     }
 
     # -----------------------------------------
-    # Update Parameter
+    # Build Parameter Update Body
     # -----------------------------------------
     $updateBody = @{
         updateDetails = @(
             @{
-                name = "OneDriveFilePath"
-                newValue = $FullURL
+                name     = "OneDriveSiteUrl"
+                newValue = $OneDriveSiteUrl
+            },
+            @{
+                name     = "OneDriveFilePath"
+                newValue = $OneDriveFilePath
             }
         )
-    } | ConvertTo-Json -Depth 5
+    } | ConvertTo-Json -Depth 10
 
     Write-Host ""
-    Write-Host "Updating parameter..."
+    Write-Host "Updating dataset parameters..."
+    Write-Host $updateBody
+
+    # -----------------------------------------
+    # Update Parameters
+    # -----------------------------------------
+    $updateUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/UpdateParameters"
+
     Invoke-RestMethod `
-        -Uri "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/UpdateParameters" `
+        -Uri $updateUrl `
         -Headers $headers `
         -Method Post `
-        -Body $updateBody
+        -Body $updateBody `
+        -ErrorAction Stop
 
     Write-Host ""
     Write-Host "==================================================" -ForegroundColor Green
-    Write-Host "OneDriveFilePath updated successfully ($Environment)" -ForegroundColor Green
+    Write-Host "Parameters updated successfully ($Environment)" -ForegroundColor Green
     Write-Host "==================================================" -ForegroundColor Green
+
+    # -----------------------------------------
+    # Verify Update
+    # -----------------------------------------
+    Write-Host ""
+    Write-Host "Verifying updated parameters..."
+    Start-Sleep -Seconds 2
+
+    $verifyParams = Invoke-RestMethod -Uri $paramsUrl -Headers $headers -Method Get
+
+    foreach ($p in $verifyParams.value) {
+        Write-Host "✓ $($p.name): $($p.currentValue)" -ForegroundColor Green
+    }
 
     exit 0
 }
 catch {
-    Write-Warning "Parameter update skipped due to API restriction"
-    Write-Warning $_.Exception.Message
-    Write-Host "Continuing pipeline safely..."
-    exit 0
+    Write-Host ""
+    Write-Error "❌ Failed to update dataset parameters"
+    Write-Error $_.Exception.Message
+
+    if ($_.Exception.Response) {
+        try {
+            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+            $responseBody = $reader.ReadToEnd()
+            Write-Error "Response: $responseBody"
+        }
+        catch {
+            Write-Warning "Could not read error response"
+        }
+    }
+
+    exit 1
 }
