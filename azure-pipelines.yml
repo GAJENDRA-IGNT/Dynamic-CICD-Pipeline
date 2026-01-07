@@ -130,26 +130,27 @@ stages:
               }
           }
     
-    - task: PowerShell@2
-      displayName: 'Update to DEV OneDrive File'
-      continueOnError: true
-      inputs:
-        targetType: 'inline'
-        script: |
-          if ([string]::IsNullOrEmpty($env:DatasetId)) {
-              Write-Host "No DatasetId, skipping"
-              exit 0
-          }
-          
-          & "$(Build.SourcesDirectory)/Scripts/Update-OneDriveFilePath.ps1" `
-              -ClientId "$(ServicePrincipalClientId)" `
-              -ClientSecret "$(ServicePrincipalSecret)" `
-              -TenantId "$(TenantId)" `
-              -WorkspaceId "$(DevWorkspaceId)" `
-              -DatasetId $env:DatasetId `
-              -OneDriveURL "$(OneDriveURL)" `
-              -FilePath "$(DevFilePath)" `
-              -Environment "DEV"
+- task: PowerShell@2
+  displayName: 'Update Parameters (DEV)'
+  continueOnError: true
+  inputs:
+    targetType: 'inline'
+    script: |
+      if ([string]::IsNullOrEmpty($env:DatasetId)) {
+          Write-Host "DatasetId not found, skipping parameter update"
+          exit 0
+      }
+
+      & "$(Build.SourcesDirectory)/Scripts/Update-OneDriveFilePath.ps1" `
+        -ClientId "$(ServicePrincipalClientId)" `
+        -ClientSecret "$(ServicePrincipalSecret)" `
+        -TenantId "$(TenantId)" `
+        -WorkspaceId "$(DevWorkspaceId)" `
+        -DatasetId $env:DatasetId `
+        -OneDriveSiteUrl "$(OneDriveURL)" `
+        -OneDriveFilePath "$(DevFilePath)" `
+        -Environment "DEV"
+
     
     - task: PowerShell@2
       displayName: 'Smart Refresh Dataset (DEV)'
@@ -270,8 +271,8 @@ stages:
                     -TenantId "$(TenantId)" `
                     -WorkspaceId "$(ProdWorkspaceId)" `
                     -DatasetId $env:DatasetId `
-                    -OneDriveURL "$(OneDriveURL)" `
-                    -FilePath "$(ProdFilePath)" `
+                    -OneDriveSiteUrl "$(OneDriveURL)" `
+                    -OneDriveFilePath "$(ProdFilePath)" `
                     -Environment "PROD"
           
           - task: PowerShell@2

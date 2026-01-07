@@ -20,6 +20,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OneDriveFilePath,
 
+    [Parameter(Mandatory = $false)]
     [string]$Environment = "DEV"
 )
 

@@ -1,18 +1,21 @@
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [string]$ClientId,
-    
-    [Parameter(Mandatory=$true)]
+
+    [Parameter(Mandatory = $true)]
     [string]$ClientSecret,
-    
-    [Parameter(Mandatory=$true)]
+
+    [Parameter(Mandatory = $true)]
     [string]$TenantId,
-    
-    [Parameter(Mandatory=$true)]
+
+    [Parameter(Mandatory = $true)]
     [string]$WorkspaceId,
-    
-    [Parameter(Mandatory=$true)]
-    [string]$DatasetId
+
+    [Parameter(Mandatory = $true)]
+    [string]$DatasetId,
+
+    [Parameter(Mandatory = $false)]
+    [string]$Environment = "DEV"
 )
 
 Write-Host "============================================"
