@@ -15,25 +15,23 @@ param (
     [string]$DatasetId,
 
     [Parameter(Mandatory = $true)]
-    [string]$OneDriveSiteUrl,
+    [string]$SharePointSiteUrl,
 
     [Parameter(Mandatory = $true)]
-    [string]$OneDriveFilePath
+    [string]$FilePath
 )
 
 Write-Host "============================================"
-Write-Host "Updating OneDrive Parameters"
+Write-Host "Updating SharePoint Dataset Parameters"
 Write-Host "============================================"
 Write-Host "Workspace ID : $WorkspaceId"
 Write-Host "Dataset ID   : $DatasetId"
-Write-Host "Site URL     : $OneDriveSiteUrl"
-Write-Host "File Path    : $OneDriveFilePath"
+Write-Host "Site URL     : $SharePointSiteUrl"
+Write-Host "File Path    : $FilePath"
 Write-Host ""
 
 try {
-    # -----------------------------------------
-    # Get Power BI access token
-    # -----------------------------------------
+    # Get token
     $tokenBody = @{
         grant_type    = "client_credentials"
         client_id     = $ClientId
@@ -42,67 +40,49 @@ try {
     }
 
     $tokenUrl = "https://login.microsoftonline.com/$TenantId/oauth2/token"
-    $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody
-    $accessToken = $tokenResponse.access_token
+    $token = (Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody).access_token
 
-    if (-not $accessToken) {
-        throw "Failed to obtain Power BI access token"
-    }
+    if (-not $token) { throw "Failed to get access token" }
 
     $headers = @{
-        Authorization = "Bearer $accessToken"
+        Authorization = "Bearer $token"
         "Content-Type" = "application/json"
     }
 
-    Write-Host "Access token obtained" -ForegroundColor Green
-
-    # -----------------------------------------
-    # Validate parameters exist in dataset
-    # -----------------------------------------
+    # Validate parameters
     $paramsUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/parameters"
-    $existingParams = Invoke-RestMethod -Uri $paramsUrl -Headers $headers -Method Get
+    $existing = (Invoke-RestMethod -Method Get -Uri $paramsUrl -Headers $headers).value.name
 
-    $paramNames = $existingParams.value.name
-
-    if (-not ($paramNames -contains "OneDriveSiteUrl")) {
-        throw "Dataset parameter 'OneDriveSiteUrl' does not exist in PBIX"
+    if (-not ($existing -contains "SharePointSiteUrl")) {
+        throw "Parameter 'SharePointSiteUrl' not found in dataset"
+    }
+    if (-not ($existing -contains "FilePath")) {
+        throw "Parameter 'FilePath' not found in dataset"
     }
 
-    if (-not ($paramNames -contains "OneDriveFilePath")) {
-        throw "Dataset parameter 'OneDriveFilePath' does not exist in PBIX"
-    }
+    Write-Host "Parameters validated successfully"
 
-    Write-Host "Required parameters found in dataset" -ForegroundColor Green
-
-    # -----------------------------------------
     # Update parameters
-    # -----------------------------------------
-    $updateBody = @{
+    $body = @{
         updateDetails = @(
             @{
-                name = "OneDriveSiteUrl"
-                newValue = $OneDriveSiteUrl
+                name = "SharePointSiteUrl"
+                newValue = $SharePointSiteUrl
             },
             @{
-                name = "OneDriveFilePath"
-                newValue = $OneDriveFilePath
+                name = "FilePath"
+                newValue = $FilePath
             }
         )
     } | ConvertTo-Json -Depth 5
 
-    Write-Host ""
-    Write-Host "Updating dataset parameters..."
-    Write-Host $updateBody
-
     $updateUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/UpdateParameters"
-    Invoke-RestMethod -Uri $updateUrl -Headers $headers -Method Post -Body $updateBody
+    Invoke-RestMethod -Method Post -Uri $updateUrl -Headers $headers -Body $body
 
-    Write-Host ""
-    Write-Host "Parameters updated successfully" -ForegroundColor Green
+    Write-Host "Dataset parameters updated successfully" -ForegroundColor Green
     exit 0
 }
 catch {
-    Write-Error "Failed to update dataset parameters"
     Write-Error $_.Exception.Message
     exit 1
 }
