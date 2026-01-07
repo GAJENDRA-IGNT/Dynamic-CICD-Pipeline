@@ -1,4 +1,4 @@
-param(
+param (
     [Parameter(Mandatory = $true)]
     [string]$ClientId,
 
@@ -18,26 +18,22 @@ param(
     [string]$OneDriveSiteUrl,
 
     [Parameter(Mandatory = $true)]
-    [string]$OneDriveFilePath,
-
-    [Parameter(Mandatory = $false)]
-    [string]$Environment = "DEV"
+    [string]$OneDriveFilePath
 )
 
 Write-Host "============================================"
-Write-Host "Updating OneDrive Parameters ($Environment)"
+Write-Host "Updating OneDrive Parameters"
 Write-Host "============================================"
-Write-Host "Workspace ID     : $WorkspaceId"
-Write-Host "Dataset ID       : $DatasetId"
-Write-Host "Site URL         : $OneDriveSiteUrl"
-Write-Host "File Path        : $OneDriveFilePath"
+Write-Host "Workspace ID : $WorkspaceId"
+Write-Host "Dataset ID   : $DatasetId"
+Write-Host "Site URL     : $OneDriveSiteUrl"
+Write-Host "File Path    : $OneDriveFilePath"
 Write-Host ""
 
 try {
-
-    # ------------------------------------------------
+    # -----------------------------
     # Get Access Token
-    # ------------------------------------------------
+    # -----------------------------
     $tokenBody = @{
         grant_type    = "client_credentials"
         client_id     = $ClientId
@@ -46,20 +42,20 @@ try {
     }
 
     $tokenUrl = "https://login.microsoftonline.com/$TenantId/oauth2/token"
-    $tokenResponse = Invoke-RestMethod -Uri $tokenUrl -Method Post -Body $tokenBody
+    $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody
     $accessToken = $tokenResponse.access_token
-
-    Write-Host "Access token obtained" -ForegroundColor Green
 
     $headers = @{
         Authorization = "Bearer $accessToken"
         "Content-Type" = "application/json"
     }
 
-    # ------------------------------------------------
-    # Build Update Body (UPDATE BOTH PARAMETERS)
-    # ------------------------------------------------
-    $updateBody = @{
+    Write-Host "Access token obtained"
+
+    # -----------------------------
+    # Build request body
+    # -----------------------------
+    $body = @{
         updateDetails = @(
             @{
                 name     = "OneDriveSiteUrl"
@@ -74,42 +70,25 @@ try {
 
     Write-Host ""
     Write-Host "Updating dataset parameters..."
-    Write-Host $updateBody
+    Write-Host $body
 
-    # ------------------------------------------------
-    # Update Parameters
-    # ------------------------------------------------
-    $updateUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/UpdateParameters"
+    # -----------------------------
+    # Update parameters
+    # -----------------------------
+    $updateUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/Default.UpdateParameters"
 
     Invoke-RestMethod `
+        -Method Post `
         -Uri $updateUrl `
         -Headers $headers `
-        -Method Post `
-        -Body $updateBody `
-        -ErrorAction Stop
+        -Body $body
 
     Write-Host ""
-    Write-Host "==================================================" -ForegroundColor Green
-    Write-Host "Parameters updated successfully ($Environment)" -ForegroundColor Green
-    Write-Host "==================================================" -ForegroundColor Green
-
+    Write-Host "OneDrive parameters updated successfully" -ForegroundColor Green
     exit 0
 }
 catch {
-    Write-Host ""
-    Write-Warning "Failed to update dataset parameters"
-    Write-Warning $_.Exception.Message
-
-    if ($_.Exception.Response) {
-        try {
-            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-            $responseBody = $reader.ReadToEnd()
-            Write-Warning "Response: $responseBody"
-        }
-        catch {
-            Write-Warning "Could not read error response"
-        }
-    }
-
+    Write-Error "Failed to update dataset parameters"
+    Write-Error $_.Exception.Message
     exit 1
 }
