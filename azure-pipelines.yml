@@ -134,7 +134,7 @@ stages:
   jobs:
   - deployment: DeployPROD
     displayName: Publish & Configure PROD
-    environment: PowerBI-PROD
+    environment: PowerBI-Production
     strategy:
       runOnce:
         deploy:
