@@ -85,7 +85,7 @@ stages:
     # Update OneDrive Parameters
     # -------------------------------
     - task: PowerShell@2
-      displayName: Update OneDrive Parameters (DEV)
+      displayName: Update SharePoint Parameters (DEV)
       inputs:
         targetType: inline
         script: |
@@ -95,8 +95,8 @@ stages:
             -TenantId "$(TenantId)" `
             -WorkspaceId "$(DevWorkspaceId)" `
             -DatasetId "$(DatasetId)" `
-            -OneDriveSiteUrl "$(OneDriveSiteUrl)" `
-            -OneDriveFilePath "$(DevFilePath)"
+            -SharePointSiteUrl "$(OneDriveSiteUrl)" `
+            -FilePath  "$(DevFilePath)"
 
     # -------------------------------
     # Refresh Dataset
@@ -191,8 +191,8 @@ stages:
                   -TenantId "$(TenantId)" `
                   -WorkspaceId "$(ProdWorkspaceId)" `
                   -DatasetId "$(DatasetId)" `
-                  -OneDriveSiteUrl "$(OneDriveSiteUrl)" `
-                  -OneDriveFilePath "$(ProdFilePath)"
+                  -SharePointSiteUrl "$(OneDriveSiteUrl)" `
+                  -FilePath  "$(ProdFilePath)"
 
           - task: PowerShell@2
             displayName: Refresh Dataset (PROD)
