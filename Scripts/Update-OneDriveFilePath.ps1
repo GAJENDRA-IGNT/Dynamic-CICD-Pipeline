@@ -31,9 +31,9 @@ Write-Host "File Path    : $OneDriveFilePath"
 Write-Host ""
 
 try {
-    # -----------------------------
-    # Get Access Token
-    # -----------------------------
+    # -----------------------------------------
+    # Get Power BI access token
+    # -----------------------------------------
     $tokenBody = @{
         grant_type    = "client_credentials"
         client_id     = $ClientId
@@ -45,24 +45,46 @@ try {
     $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody
     $accessToken = $tokenResponse.access_token
 
+    if (-not $accessToken) {
+        throw "Failed to obtain Power BI access token"
+    }
+
     $headers = @{
         Authorization = "Bearer $accessToken"
         "Content-Type" = "application/json"
     }
 
-    Write-Host "Access token obtained"
+    Write-Host "Access token obtained" -ForegroundColor Green
 
-    # -----------------------------
-    # Build request body
-    # -----------------------------
-    $body = @{
+    # -----------------------------------------
+    # Validate parameters exist in dataset
+    # -----------------------------------------
+    $paramsUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/parameters"
+    $existingParams = Invoke-RestMethod -Uri $paramsUrl -Headers $headers -Method Get
+
+    $paramNames = $existingParams.value.name
+
+    if (-not ($paramNames -contains "OneDriveSiteUrl")) {
+        throw "Dataset parameter 'OneDriveSiteUrl' does not exist in PBIX"
+    }
+
+    if (-not ($paramNames -contains "OneDriveFilePath")) {
+        throw "Dataset parameter 'OneDriveFilePath' does not exist in PBIX"
+    }
+
+    Write-Host "Required parameters found in dataset" -ForegroundColor Green
+
+    # -----------------------------------------
+    # Update parameters
+    # -----------------------------------------
+    $updateBody = @{
         updateDetails = @(
             @{
-                name     = "OneDriveSiteUrl"
+                name = "OneDriveSiteUrl"
                 newValue = $OneDriveSiteUrl
             },
             @{
-                name     = "OneDriveFilePath"
+                name = "OneDriveFilePath"
                 newValue = $OneDriveFilePath
             }
         )
@@ -70,21 +92,13 @@ try {
 
     Write-Host ""
     Write-Host "Updating dataset parameters..."
-    Write-Host $body
+    Write-Host $updateBody
 
-    # -----------------------------
-    # Update parameters
-    # -----------------------------
-    $updateUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/Default.UpdateParameters"
-
-    Invoke-RestMethod `
-        -Method Post `
-        -Uri $updateUrl `
-        -Headers $headers `
-        -Body $body
+    $updateUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/UpdateParameters"
+    Invoke-RestMethod -Uri $updateUrl -Headers $headers -Method Post -Body $updateBody
 
     Write-Host ""
-    Write-Host "OneDrive parameters updated successfully" -ForegroundColor Green
+    Write-Host "Parameters updated successfully" -ForegroundColor Green
     exit 0
 }
 catch {
