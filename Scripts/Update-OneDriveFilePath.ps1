@@ -1,4 +1,4 @@
-param(
+param (
     [Parameter(Mandatory = $true)]
     [string]$ClientId,
 
@@ -12,98 +12,83 @@ param(
     [string]$WorkspaceId,
 
     [Parameter(Mandatory = $true)]
-    [string]$ReportPath
+    [string]$DatasetId,
+
+    [Parameter(Mandatory = $true)]
+    [string]$OneDriveSiteUrl,
+
+    [Parameter(Mandatory = $true)]
+    [string]$OneDriveFilePath
 )
 
 Write-Host "============================================"
-Write-Host "Publishing Power BI Report"
+Write-Host "Updating OneDrive Parameters"
 Write-Host "============================================"
-Write-Host "Report Path  : $ReportPath"
 Write-Host "Workspace ID : $WorkspaceId"
+Write-Host "Dataset ID   : $DatasetId"
+Write-Host "Site URL     : $OneDriveSiteUrl"
+Write-Host "File Path    : $OneDriveFilePath"
 Write-Host ""
 
 try {
-    # -------------------------------------------------
-    # Install & Import Power BI Module
-    # -------------------------------------------------
-    if (-not (Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt)) {
-        Install-Module MicrosoftPowerBIMgmt -Force -Scope CurrentUser -AllowClobber
-    }
-    Import-Module MicrosoftPowerBIMgmt
-
-    # -------------------------------------------------
-    # Authenticate using Service Principal
-    # -------------------------------------------------
-    Write-Host "Authenticating with Service Principal..."
-
-    $securePassword = ConvertTo-SecureString $ClientSecret -AsPlainText -Force
-    $credential = New-Object System.Management.Automation.PSCredential ($ClientId, $securePassword)
-
-    Connect-PowerBIServiceAccount `
-        -ServicePrincipal `
-        -Credential $credential `
-        -TenantId $TenantId `
-        -ErrorAction Stop
-
-    Write-Host "Authentication successful" -ForegroundColor Green
-
-    # -------------------------------------------------
-    # Verify Workspace
-    # -------------------------------------------------
-    $workspace = Get-PowerBIWorkspace -Id $WorkspaceId -ErrorAction Stop
-    Write-Host "Workspace found: $($workspace.Name)" -ForegroundColor Green
-
-    # -------------------------------------------------
-    # Detect report existence
-    # -------------------------------------------------
-    $reportName = [System.IO.Path]::GetFileNameWithoutExtension($ReportPath)
-    $existingReports = Get-PowerBIReport -WorkspaceId $WorkspaceId -ErrorAction SilentlyContinue
-    $existingReport = $existingReports | Where-Object { $_.Name -eq $reportName }
-
-    if ($existingReport) {
-        Write-Host "Report exists → Overwriting report (dataset preserved)" -ForegroundColor Cyan
-    }
-    else {
-        Write-Host "Report does not exist → First-time publish" -ForegroundColor Yellow
+    # -----------------------------
+    # Get Access Token
+    # -----------------------------
+    $tokenBody = @{
+        grant_type    = "client_credentials"
+        client_id     = $ClientId
+        client_secret = $ClientSecret
+        resource      = "https://analysis.windows.net/powerbi/api"
     }
 
-    # -------------------------------------------------
-    # Publish report (ALWAYS CreateOrOverwrite)
-    # -------------------------------------------------
-    $report = New-PowerBIReport `
-        -Path $ReportPath `
-        -WorkspaceId $WorkspaceId `
-        -Name $reportName `
-        -ConflictAction CreateOrOverwrite `
-        -ErrorAction Stop
+    $tokenUrl = "https://login.microsoftonline.com/$TenantId/oauth2/token"
+    $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody
+    $accessToken = $tokenResponse.access_token
 
-    Write-Host "Report published successfully" -ForegroundColor Green
-    Write-Host "Report ID: $($report.Id)"
-
-    # -------------------------------------------------
-    # Get Dataset ID (reused automatically)
-    # -------------------------------------------------
-    $datasets = Get-PowerBIDataset -WorkspaceId $WorkspaceId
-    $dataset = $datasets | Where-Object { $_.Name -eq $reportName } | Select-Object -First 1
-
-    if ($dataset) {
-        Write-Host "Dataset ID: $($dataset.Id)" -ForegroundColor Green
-        Write-Host "##vso[task.setvariable variable=DatasetId]$($dataset.Id)"
-    }
-    else {
-        Write-Warning "Dataset not found after publish"
+    $headers = @{
+        Authorization = "Bearer $accessToken"
+        "Content-Type" = "application/json"
     }
 
-    # -------------------------------------------------
-    # Set pipeline variables
-    # -------------------------------------------------
-    Write-Host "##vso[task.setvariable variable=ReportId]$($report.Id)"
-    Write-Host "##vso[task.setvariable variable=ReportName]$reportName"
+    Write-Host "Access token obtained"
 
+    # -----------------------------
+    # Build request body
+    # -----------------------------
+    $body = @{
+        updateDetails = @(
+            @{
+                name     = "OneDriveSiteUrl"
+                newValue = $OneDriveSiteUrl
+            },
+            @{
+                name     = "OneDriveFilePath"
+                newValue = $OneDriveFilePath
+            }
+        )
+    } | ConvertTo-Json -Depth 5
+
+    Write-Host ""
+    Write-Host "Updating dataset parameters..."
+    Write-Host $body
+
+    # -----------------------------
+    # Update parameters
+    # -----------------------------
+    $updateUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets/$DatasetId/Default.UpdateParameters"
+
+    Invoke-RestMethod `
+        -Method Post `
+        -Uri $updateUrl `
+        -Headers $headers `
+        -Body $body
+
+    Write-Host ""
+    Write-Host "OneDrive parameters updated successfully" -ForegroundColor Green
     exit 0
 }
 catch {
-    Write-Error "Failed to publish report"
+    Write-Error "Failed to update dataset parameters"
     Write-Error $_.Exception.Message
     exit 1
 }
