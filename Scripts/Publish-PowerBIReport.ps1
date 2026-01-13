@@ -25,11 +25,12 @@ Write-Host ""
 try {
     # Install module if missing
     if (-not (Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt)) {
+        Write-Host "Installing MicrosoftPowerBIMgmt module..."
         Install-Module MicrosoftPowerBIMgmt -Force -Scope CurrentUser -AllowClobber
     }
     Import-Module MicrosoftPowerBIMgmt
 
-    # Authenticate
+    # Authenticate with Service Principal
     Write-Host "Authenticating with Service Principal..."
     $securePassword = ConvertTo-SecureString $ClientSecret -AsPlainText -Force
     $credential = New-Object System.Management.Automation.PSCredential ($ClientId, $securePassword)
@@ -42,13 +43,25 @@ try {
 
     Write-Host "Authentication successful" -ForegroundColor Green
 
-    # Validate workspace
+    # Validate workspace exists
     $workspace = Get-PowerBIWorkspace -Id $WorkspaceId -ErrorAction Stop
     Write-Host "Workspace found: $($workspace.Name)" -ForegroundColor Green
 
-    # Publish (ALWAYS CreateOrOverwrite)
+    # Get report name
     $reportName = [System.IO.Path]::GetFileNameWithoutExtension($ReportPath)
 
+    # Check if dataset already exists (to preserve settings)
+    $existingDataset = Get-PowerBIDataset -WorkspaceId $WorkspaceId | 
+                       Where-Object { $_.Name -eq $reportName } | 
+                       Select-Object -First 1
+
+    if ($existingDataset) {
+        Write-Host "Existing dataset found: $($existingDataset.Id)" -ForegroundColor Yellow
+        Write-Host "Will overwrite and preserve gateway bindings..." -ForegroundColor Yellow
+    }
+
+    # Publish report with CreateOrOverwrite (preserves dataset ID)
+    Write-Host ""
     Write-Host "Publishing report using CreateOrOverwrite..."
 
     $report = New-PowerBIReport `
@@ -58,26 +71,51 @@ try {
         -ConflictAction CreateOrOverwrite `
         -ErrorAction Stop
 
-    Write-Host "Report published successfully" -ForegroundColor Green
-    Write-Host "Report ID: $($report.Id)"
+    Write-Host ""
+    Write-Host "================================================" -ForegroundColor Green
+    Write-Host "Report published successfully!" -ForegroundColor Green
+    Write-Host "================================================" -ForegroundColor Green
+    Write-Host "Report ID   : $($report.Id)"
+    Write-Host "Report Name : $reportName"
 
-    # Fetch dataset
+    # Wait for dataset to be available
+    Start-Sleep -Seconds 5
+
+    # Get dataset ID
     $dataset = Get-PowerBIDataset -WorkspaceId $WorkspaceId |
                Where-Object { $_.Name -eq $reportName } |
                Select-Object -First 1
 
     if ($dataset) {
-        Write-Host "Dataset ID: $($dataset.Id)" -ForegroundColor Green
+        Write-Host "Dataset ID  : $($dataset.Id)" -ForegroundColor Green
+        
+        # Set pipeline variables for subsequent steps
         Write-Host "##vso[task.setvariable variable=DatasetId]$($dataset.Id)"
+        Write-Host "##vso[task.setvariable variable=ReportId]$($report.Id)"
+        Write-Host "##vso[task.setvariable variable=ReportName]$reportName"
+    }
+    else {
+        Write-Warning "Could not find dataset after publish"
     }
 
-    Write-Host "##vso[task.setvariable variable=ReportId]$($report.Id)"
-    Write-Host "##vso[task.setvariable variable=ReportName]$reportName"
-
+    Write-Host ""
     exit 0
 }
 catch {
-    Write-Error "Publish failed"
+    Write-Host ""
+    Write-Host "================================================" -ForegroundColor Red
+    Write-Error "Publish failed!"
+    Write-Host "================================================" -ForegroundColor Red
     Write-Error $_.Exception.Message
+    
+    if ($_.Exception.Response) {
+        try {
+            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+            $responseBody = $reader.ReadToEnd()
+            Write-Error "Response: $responseBody"
+        }
+        catch { }
+    }
+    
     exit 1
 }
