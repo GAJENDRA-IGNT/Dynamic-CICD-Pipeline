@@ -1,36 +1,43 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$ClientId,
-
+    
     [Parameter(Mandatory = $true)]
     [string]$ClientSecret,
-
+    
     [Parameter(Mandatory = $true)]
     [string]$TenantId,
-
+    
     [Parameter(Mandatory = $true)]
     [string]$WorkspaceId,
-
+    
     [Parameter(Mandatory = $true)]
-    [string]$ReportPath
+    [string]$ReportPath,
+
+    [switch]$FirstDeployment
 )
 
 Write-Host "============================================"
 Write-Host "Publishing Power BI Report"
 Write-Host "============================================"
-Write-Host "Report Path  : $ReportPath"
-Write-Host "Workspace ID : $WorkspaceId"
+Write-Host "Report Path      : $ReportPath"
+Write-Host "Workspace ID     : $WorkspaceId"
+Write-Host "First Deployment : $FirstDeployment"
 Write-Host ""
 
 try {
-    # Install module if missing
+    # -----------------------------------------
+    # Install & Import Power BI Module
+    # -----------------------------------------
     if (-not (Get-Module -ListAvailable -Name MicrosoftPowerBIMgmt)) {
         Write-Host "Installing MicrosoftPowerBIMgmt module..."
-        Install-Module MicrosoftPowerBIMgmt -Force -Scope CurrentUser -AllowClobber
+        Install-Module -Name MicrosoftPowerBIMgmt -Force -Scope CurrentUser -AllowClobber
     }
     Import-Module MicrosoftPowerBIMgmt
 
-    # Authenticate with Service Principal
+    # -----------------------------------------
+    # Authenticate using Service Principal
+    # -----------------------------------------
     Write-Host "Authenticating with Service Principal..."
     $securePassword = ConvertTo-SecureString $ClientSecret -AsPlainText -Force
     $credential = New-Object System.Management.Automation.PSCredential ($ClientId, $securePassword)
@@ -43,79 +50,106 @@ try {
 
     Write-Host "Authentication successful" -ForegroundColor Green
 
-    # Validate workspace exists
+    # -----------------------------------------
+    # Verify Workspace
+    # -----------------------------------------
+    Write-Host "Verifying workspace access..."
     $workspace = Get-PowerBIWorkspace -Id $WorkspaceId -ErrorAction Stop
     Write-Host "Workspace found: $($workspace.Name)" -ForegroundColor Green
 
-    # Get report name
+    # -----------------------------------------
+    # Publish Report
+    # -----------------------------------------
     $reportName = [System.IO.Path]::GetFileNameWithoutExtension($ReportPath)
 
-    # Check if dataset already exists (to preserve settings)
-    $existingDataset = Get-PowerBIDataset -WorkspaceId $WorkspaceId | 
-                       Where-Object { $_.Name -eq $reportName } | 
-                       Select-Object -First 1
-
-    if ($existingDataset) {
-        Write-Host "Existing dataset found: $($existingDataset.Id)" -ForegroundColor Yellow
-        Write-Host "Will overwrite and preserve gateway bindings..." -ForegroundColor Yellow
+    if ($FirstDeployment) {
+        Write-Host "FIRST DEPLOYMENT: Creating dataset & report" -ForegroundColor Yellow
+        $conflictAction = "CreateOrOverwrite"
+    }
+    else {
+        Write-Host "UPDATE DEPLOYMENT: Preserving dataset" -ForegroundColor Green
+        $conflictAction = "Overwrite"
     }
 
-    # Publish report with CreateOrOverwrite (preserves dataset ID)
-    Write-Host ""
-    Write-Host "Publishing report using CreateOrOverwrite..."
+    Write-Host "Publishing report with ConflictAction = $conflictAction"
 
     $report = New-PowerBIReport `
         -Path $ReportPath `
         -WorkspaceId $WorkspaceId `
         -Name $reportName `
-        -ConflictAction CreateOrOverwrite `
+        -ConflictAction $conflictAction `
         -ErrorAction Stop
 
+    Write-Host "Successfully published: $reportName" -ForegroundColor Green
+    Write-Host "Report ID: $($report.Id)"
+
+    # -----------------------------------------
+    # Get DatasetId via REST API
+    # -----------------------------------------
     Write-Host ""
-    Write-Host "================================================" -ForegroundColor Green
-    Write-Host "Report published successfully!" -ForegroundColor Green
-    Write-Host "================================================" -ForegroundColor Green
-    Write-Host "Report ID   : $($report.Id)"
-    Write-Host "Report Name : $reportName"
+    Write-Host "Retrieving Dataset ID..."
 
-    # Wait for dataset to be available
-    Start-Sleep -Seconds 5
+    $tokenBody = @{
+        grant_type    = "client_credentials"
+        client_id     = $ClientId
+        client_secret = $ClientSecret
+        resource      = "https://analysis.windows.net/powerbi/api"
+    }
 
-    # Get dataset ID
-    $dataset = Get-PowerBIDataset -WorkspaceId $WorkspaceId |
-               Where-Object { $_.Name -eq $reportName } |
-               Select-Object -First 1
+    $tokenUrl = "https://login.microsoftonline.com/$TenantId/oauth2/token"
+    $tokenResponse = Invoke-RestMethod -Uri $tokenUrl -Method Post -Body $tokenBody
+    $accessToken = $tokenResponse.access_token
 
-    if ($dataset) {
-        Write-Host "Dataset ID  : $($dataset.Id)" -ForegroundColor Green
-        
-        # Set pipeline variables for subsequent steps
-        Write-Host "##vso[task.setvariable variable=DatasetId]$($dataset.Id)"
-        Write-Host "##vso[task.setvariable variable=ReportId]$($report.Id)"
-        Write-Host "##vso[task.setvariable variable=ReportName]$reportName"
+    $headers = @{
+        "Authorization" = "Bearer $accessToken"
+        "Content-Type"  = "application/json"
+    }
+
+    $reportUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/reports/$($report.Id)"
+    $reportDetails = Invoke-RestMethod -Uri $reportUrl -Headers $headers -Method Get
+
+    $datasetId = $reportDetails.datasetId
+
+    if ([string]::IsNullOrEmpty($datasetId)) {
+        Write-Warning "DatasetId not found via report endpoint. Searching datasets..."
+        $datasetsUrl = "https://api.powerbi.com/v1.0/myorg/groups/$WorkspaceId/datasets"
+        $datasets = Invoke-RestMethod -Uri $datasetsUrl -Headers $headers -Method Get
+
+        $matchingDataset = $datasets.value | Where-Object { $_.name -eq $reportName } | Select-Object -First 1
+
+        if ($matchingDataset) {
+            $datasetId = $matchingDataset.id
+            Write-Host "Dataset found: $datasetId" -ForegroundColor Green
+        }
+        else {
+            Write-Warning "No associated dataset found"
+            $datasetId = ""
+        }
     }
     else {
-        Write-Warning "Could not find dataset after publish"
+        Write-Host "Dataset ID: $datasetId" -ForegroundColor Green
     }
 
+    # -----------------------------------------
+    # Set Pipeline Variables
+    # -----------------------------------------
     Write-Host ""
+    Write-Host "Setting pipeline variables..."
+
+    Write-Host "##vso[task.setvariable variable=ReportId]$($report.Id)"
+    Write-Host "##vso[task.setvariable variable=DatasetId]$datasetId"
+    Write-Host "##vso[task.setvariable variable=ReportName]$reportName"
+
+    Write-Host ""
+    Write-Host "Pipeline variables set successfully:"
+    Write-Host "  ReportId   : $($report.Id)"
+    Write-Host "  DatasetId  : $datasetId"
+    Write-Host "  ReportName : $reportName"
+
     exit 0
 }
 catch {
-    Write-Host ""
-    Write-Host "================================================" -ForegroundColor Red
-    Write-Error "Publish failed!"
-    Write-Host "================================================" -ForegroundColor Red
+    Write-Error "Failed to publish report"
     Write-Error $_.Exception.Message
-    
-    if ($_.Exception.Response) {
-        try {
-            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-            $responseBody = $reader.ReadToEnd()
-            Write-Error "Response: $responseBody"
-        }
-        catch { }
-    }
-    
     exit 1
 }
